@@ -1,5 +1,5 @@
 use crate::{
-    evaluator::Evaluator,
+    evaluator::{Evaluator, OutColumn},
     metacommands::MetaCommand,
     parser::parser::{self, Query},
     table::Table,
@@ -36,6 +36,31 @@ pub struct View {
     rows: Vec<Row>,
 }
 
+impl View {
+    pub fn new(cols: Vec<OutColumn>) -> Self {
+        let columns = cols.iter().map(|c| c.name.clone()).collect();
+
+        let max_rows = cols.iter().map(|c| c.data.len()).max().unwrap_or(0);
+
+        let mut rows = Vec::new();
+        for i in 0..=max_rows {
+            let mut row = Vec::new();
+            for col in &cols {
+                row.push(col.data.get_as_string(i).unwrap_or_default());
+            }
+
+            // don't show empty rows
+            if row.iter().all(|x| x.is_empty()) {
+                continue;
+            }
+
+            rows.push(Row { items: row });
+        }
+
+        Self { columns, rows }
+    }
+}
+
 impl From<View> for prettytable::Table {
     fn from(val: View) -> Self {
         let mut table = prettytable::Table::new();
@@ -59,11 +84,13 @@ impl From<&View> for prettytable::Table {
 
         table.add_row(prettytable::Row::from_iter(&mut val.columns.iter()));
         for row in val.rows.iter() {
-            if row.is_empty() {
-                table.add_empty_row();
-            } else {
+            if !row.is_empty() {
                 table.add_row(prettytable::Row::from_iter(&mut row.items.iter()));
             }
+        }
+
+        if val.rows.is_empty() {
+            table.add_empty_row();
         }
 
         table
@@ -136,15 +163,122 @@ impl Database {
                         .find(|t| name.to_lowercase() == t.name.to_lowercase())
                 });
 
-                for p in select.projection {
-                    let eval_res = Evaluator::eval(table, p)?;
-                    log::debug!("{eval_res:?}");
+                // dear god this is dogshit
+                // but I need to get this done by tomorrow
+
+                let mut selected = Vec::new();
+                let mut projected = Vec::new();
+
+                for s in select.selection {
+                    if matches!(s, crate::parser::expression::Expression::None) {
+                        continue;
+                    }
+
+                    selected.extend(Evaluator::eval(table, s)?);
                 }
 
-                // for s in select.selection {
-                //     let eval_res = Evaluator::eval(table, s)?;
-                //     log::debug!("{eval_res:?}");
-                // }
+                for p in select.projection {
+                    projected.extend(Evaluator::eval(table, p)?);
+                }
+
+                log::debug!("selected: {selected:?}");
+                log::debug!("projected: {projected:?}");
+
+                let result = if selected.is_empty() {
+                    // everything is selected
+                    projected
+                } else {
+                    let mut res = Vec::new();
+                    for p in projected {
+                        for s in &selected {
+                            let name = p.name.clone();
+                            let keys: Vec<usize> = match &s.data {
+                                crate::table::ColumnData::Bool(b) => {
+                                    b.iter().filter(|(_, v)| **v).map(|(k, _)| *k).collect()
+                                }
+                                _ => panic!("not possible"),
+                            };
+
+                            log::debug!("selected keys: {keys:?}");
+
+                            let mut data = p.data.clone();
+                            data.retain_keys(&keys);
+
+                            let col = OutColumn { name, data };
+
+                            res.push(col);
+                        }
+                    }
+                    res
+                };
+
+                log::debug!("result: {result:?}");
+
+                return Ok(Some(View::new(result)));
+            }
+            Query::Insert {
+                table,
+                columns,
+                sources,
+            } => {
+                match self
+                    .tables
+                    .iter_mut()
+                    .find(|t| t.name.to_lowercase() == table.to_lowercase())
+                {
+                    Some(tbl) => {
+                        tbl.insert(columns, sources)?;
+                    }
+                    None => Err(Error::TableNotFound(table))?,
+                }
+            }
+            Query::Drop(table) => self
+                .tables
+                .retain(|t| t.name.to_lowercase() != table.to_lowercase()),
+            Query::Update {
+                table,
+                assignments,
+                selection,
+            } => {
+                let table = self
+                    .tables
+                    .iter_mut()
+                    .find(|t| table.to_lowercase() == t.name.to_lowercase())
+                    .ok_or(Error::TableNotFound(table))?;
+
+                let selection = selection.ok_or(Error::Unsupported(
+                    "update without selection (where)".to_string(),
+                ))?;
+
+                let selected = Evaluator::eval(Some(table), selection)?;
+                if selected.len() != 1 {
+                    return Err(Error::InvalidOperation(
+                        "more than one column found in selection".to_owned(),
+                    ));
+                }
+                let selected = selected[0].data.keys_where_true()?;
+
+                table.update(assignments, selected)?;
+            }
+            Query::Delete { table, selection } => {
+                let table = self
+                    .tables
+                    .iter_mut()
+                    .find(|t| table.to_lowercase() == t.name.to_lowercase())
+                    .ok_or(Error::TableNotFound(table))?;
+
+                if let Some(selection) = selection {
+                    let selected = Evaluator::eval(Some(table), selection)?;
+                    if selected.len() != 1 {
+                        return Err(Error::InvalidOperation(
+                            "more than one column found in selection".to_owned(),
+                        ));
+                    }
+                    let selected = selected[0].data.keys_where_true()?;
+                    table.delete(selected)?;
+                } else {
+                    table.truncate();
+                }
             }
         }
         Ok(None)

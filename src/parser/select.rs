@@ -3,6 +3,7 @@ use crate::Error;
 use super::expression::Expression;
 use sqlparser::ast::Query;
 
+#[derive(Debug)]
 pub struct Select {
     pub from: Option<String>,
     pub projection: Vec<Expression>,

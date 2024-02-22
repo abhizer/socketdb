@@ -8,8 +8,8 @@ pub struct Evaluator;
 
 #[derive(Debug, Clone)]
 pub struct OutColumn {
-    name: String,
-    data: ColumnData,
+    pub name: String,
+    pub data: ColumnData,
 }
 
 impl From<Literal> for OutColumn {
@@ -295,12 +295,12 @@ impl Evaluator {
             },
             Expression::Binary {
                 operator,
-                left,
-                right,
+                left: left_expr,
+                right: right_expr,
             } => {
                 // TODO: avoid infinite loop by checking the variant
-                let left = Evaluator::eval(table, *left)?;
-                let right = Evaluator::eval(table, *right)?;
+                let left = Evaluator::eval(table, *left_expr)?;
+                let right = Evaluator::eval(table, *right_expr.clone())?;
 
                 if left.len() != 1 || right.len() != 1 {
                     return Err(Error::InvalidQuery(
@@ -474,185 +474,262 @@ impl Evaluator {
                     },
 
                     crate::parser::expression::Binary::Eq => {
-                        let eq = match (&left.data, &right.data) {
+                        let right_data = if let Expression::Literal(right_lit) = *right_expr {
+                            ColumnData::fill_with_literal(right_lit, left.data.len())?
+                        } else {
+                            right.data.clone()
+                        };
+
+                        let eq = match (&left.data, &right_data) {
                             (ColumnData::Int(left), ColumnData::Int(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv == rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv == rv))
+                                .collect(),
                             (ColumnData::Float(left), ColumnData::Float(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv == rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv == rv))
+                                .collect(),
                             (ColumnData::Double(left), ColumnData::Double(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv == rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv == rv))
+                                .collect(),
                             (ColumnData::Bool(left), ColumnData::Bool(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv == rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv == rv))
+                                .collect(),
                             (ColumnData::Str(left), ColumnData::Str(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv == rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv == rv))
+                                .collect(),
                             _ => {
                                 return Err(Error::InvalidQuery(
                                     "binary op equals on invalid type".to_owned(),
                                 ))
                             }
                         };
-                        let mut map = BTreeMap::new();
-                        map.insert(0, eq);
-                        ColumnData::Bool(map)
+                        log::debug!("eq: {eq:?}");
+                        ColumnData::Bool(eq)
                     }
 
                     crate::parser::expression::Binary::Lt => {
-                        let lt = match (&left.data, &right.data) {
+                        let right_data = if let Expression::Literal(right_lit) = *right_expr {
+                            ColumnData::fill_with_literal(right_lit, left.data.len())?
+                        } else {
+                            right.data.clone()
+                        };
+
+                        let lt = match (&left.data, &right_data) {
                             (ColumnData::Int(left), ColumnData::Int(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv < rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv < rv))
+                                .collect(),
                             (ColumnData::Float(left), ColumnData::Float(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv < rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv < rv))
+                                .collect(),
                             (ColumnData::Double(left), ColumnData::Double(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv < rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv < rv))
+                                .collect(),
                             (ColumnData::Bool(left), ColumnData::Bool(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv < rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv < rv))
+                                .collect(),
                             _ => {
                                 return Err(Error::InvalidQuery(
                                     "binary op less than on invalid type".to_owned(),
                                 ))
                             }
                         };
-                        let mut map = BTreeMap::new();
-                        map.insert(0, lt);
-                        ColumnData::Bool(map)
+                        ColumnData::Bool(lt)
                     }
 
                     crate::parser::expression::Binary::Gt => {
-                        let gt = match (&left.data, &right.data) {
+                        let right_data = if let Expression::Literal(right_lit) = *right_expr {
+                            ColumnData::fill_with_literal(right_lit, left.data.len())?
+                        } else {
+                            right.data.clone()
+                        };
+
+                        let gt = match (&left.data, &right_data) {
                             (ColumnData::Int(left), ColumnData::Int(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv > rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv > rv))
+                                .collect(),
                             (ColumnData::Float(left), ColumnData::Float(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv > rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv > rv))
+                                .collect(),
                             (ColumnData::Double(left), ColumnData::Double(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv > rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv > rv))
+                                .collect(),
                             (ColumnData::Bool(left), ColumnData::Bool(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv > rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv > rv))
+                                .collect(),
                             _ => {
                                 return Err(Error::InvalidQuery(
                                     "binary op greater than on invalid type".to_owned(),
                                 ))
                             }
                         };
-                        let mut map = BTreeMap::new();
-                        map.insert(0, gt);
-                        ColumnData::Bool(map)
+                        ColumnData::Bool(gt)
                     }
 
                     crate::parser::expression::Binary::LtEq => {
-                        let lteq = match (&left.data, &right.data) {
+                        let right_data = if let Expression::Literal(right_lit) = *right_expr {
+                            ColumnData::fill_with_literal(right_lit, left.data.len())?
+                        } else {
+                            right.data.clone()
+                        };
+
+                        let lteq = match (&left.data, &right_data) {
                             (ColumnData::Int(left), ColumnData::Int(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv <= rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv <= rv))
+                                .collect(),
                             (ColumnData::Float(left), ColumnData::Float(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv <= rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv <= rv))
+                                .collect(),
                             (ColumnData::Double(left), ColumnData::Double(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv <= rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv <= rv))
+                                .collect(),
                             (ColumnData::Bool(left), ColumnData::Bool(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv <= rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv <= rv))
+                                .collect(),
                             _ => {
                                 return Err(Error::InvalidQuery(
                                     "binary op less than eq on invalid type".to_owned(),
                                 ))
                             }
                         };
-                        let mut map = BTreeMap::new();
-                        map.insert(0, lteq);
-                        ColumnData::Bool(map)
+                        ColumnData::Bool(lteq)
                     }
 
                     crate::parser::expression::Binary::GtEq => {
-                        let gteq = match (&left.data, &right.data) {
+                        let right_data = if let Expression::Literal(right_lit) = *right_expr {
+                            ColumnData::fill_with_literal(right_lit, left.data.len())?
+                        } else {
+                            right.data.clone()
+                        };
+
+                        let gteq = match (&left.data, &right_data) {
                             (ColumnData::Int(left), ColumnData::Int(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv >= rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv <= rv))
+                                .collect(),
                             (ColumnData::Float(left), ColumnData::Float(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv >= rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv <= rv))
+                                .collect(),
                             (ColumnData::Double(left), ColumnData::Double(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv >= rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv <= rv))
+                                .collect(),
                             (ColumnData::Bool(left), ColumnData::Bool(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv >= rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv <= rv))
+                                .collect(),
                             _ => {
                                 return Err(Error::InvalidQuery(
                                     "binary op greater than eq on invalid type".to_owned(),
                                 ))
                             }
                         };
-                        let mut map = BTreeMap::new();
-                        map.insert(0, gteq);
-                        ColumnData::Bool(map)
+                        ColumnData::Bool(gteq)
                     }
 
                     crate::parser::expression::Binary::NotEq => {
-                        let eq = match (&left.data, &right.data) {
+                        let right_data = if let Expression::Literal(right_lit) = *right_expr {
+                            ColumnData::fill_with_literal(right_lit, left.data.len())?
+                        } else {
+                            right.data.clone()
+                        };
+
+                        let neq = match (&left.data, &right_data) {
                             (ColumnData::Int(left), ColumnData::Int(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv != rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv != rv))
+                                .collect(),
                             (ColumnData::Float(left), ColumnData::Float(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv != rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv != rv))
+                                .collect(),
                             (ColumnData::Double(left), ColumnData::Double(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv != rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv != rv))
+                                .collect(),
                             (ColumnData::Bool(left), ColumnData::Bool(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv != rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv != rv))
+                                .collect(),
                             (ColumnData::Str(left), ColumnData::Str(right)) => left
                                 .iter()
                                 .zip(right)
-                                .all(|((lk, lv), (rk, rv))| (lk == rk && lv != rv)),
+                                .filter(|((lk, _), (rk, _))| lk == rk)
+                                .map(|((lk, lv), (_, rv))| (*lk, lv != rv))
+                                .collect(),
                             _ => {
                                 return Err(Error::InvalidQuery(
                                     "binary op not equal on invalid type".to_owned(),
                                 ))
                             }
                         };
-                        let mut map = BTreeMap::new();
-                        map.insert(0, eq);
-                        ColumnData::Bool(map)
+                        ColumnData::Bool(neq)
                     }
                 };
 
@@ -661,7 +738,7 @@ impl Evaluator {
                     data: out,
                 }])
             }
-            Expression::None => todo!(),
+            Expression::None => Err(Error::InvalidOperation("none operation".to_owned())),
             _ => Err(Error::Unsupported("unsupported query".to_owned())),
         }
     }

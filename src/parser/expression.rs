@@ -68,6 +68,7 @@ pub enum Ident {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Expression {
+    Values(Vec<Literal>),
     Literal(Literal),
     Ident(Ident),
     IsFalse(Box<Expression>),
@@ -140,6 +141,40 @@ impl Expression {
                 },
                 expression: Box::new(Expression::from_expr(*expr)?),
             }),
+            Expr::Function(function) => {
+                let fn_name = function.name.to_string().to_lowercase();
+                match fn_name.as_str() {
+                    "values" => {
+                        let mut lits = Vec::new();
+                        for arg in function.args.into_iter() {
+                            match arg {
+                                sqlparser::ast::FunctionArg::Named { arg, .. }
+                                | sqlparser::ast::FunctionArg::Unnamed(arg) => match arg {
+                                    sqlparser::ast::FunctionArgExpr::Expr(expr) => {
+                                        match Expression::from_expr(expr)? {
+                                            Expression::Literal(l) => {
+                                                lits.push(l);
+                                            }
+                                            _ => {
+                                                return Err(Error::Unsupported(
+                                                    "non literal inside values".to_string(),
+                                                ))
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(Error::Unsupported(
+                                            "wildcard inside values".to_string(),
+                                        ));
+                                    }
+                                },
+                            }
+                        }
+                        Ok(Expression::Values(lits))
+                    }
+                    _ => Err(Error::Unsupported(format!("function: {fn_name}"))),
+                }
+            }
             _ => Err(Error::Unsupported(format!("expression: {expr}"))),
         }
     }
