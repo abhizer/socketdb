@@ -7,12 +7,15 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fmt::Display,
     fs::File,
     io::{BufReader, Read},
     path::Path,
     str::FromStr,
 };
+
+use flume::{Receiver, Sender};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Row {
@@ -28,6 +31,10 @@ impl Row {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Database {
     tables: Vec<Table>,
+    #[serde(skip)]
+    receiver: Option<Receiver<(String, Sender<String>)>>,
+    #[serde(skip)]
+    ws_map: HashMap<String, Vec<Sender<String>>>,
 }
 
 #[derive(Debug, Default)]
@@ -130,7 +137,29 @@ impl Database {
         Ok(db)
     }
 
+    pub fn recv_senders(&mut self) -> Result<()> {
+        let Some(ref rx) = self.receiver else {
+            return Ok(());
+        };
+
+        if let Ok((tbl_name, sender)) = rx.try_recv() {
+            log::info!("subscribed to table: {tbl_name}");
+            self.ws_map
+                .entry(tbl_name)
+                .and_modify(|v| v.push(sender.clone()))
+                .or_insert(vec![sender]);
+        }
+
+        Ok(())
+    }
+
+    pub fn set_receiver(&mut self, receiver: Receiver<(String, Sender<String>)>) {
+        self.receiver = Some(receiver);
+    }
+
     pub fn execute(&mut self, query: Query) -> Result<Option<View>> {
+        self.recv_senders()?;
+
         match query {
             parser::Query::CreateTable { name, columns } => {
                 if self
@@ -152,7 +181,14 @@ impl Database {
                     .iter_mut()
                     .find(|t| t.name.to_lowercase() == tbl_name.to_lowercase())
                 {
-                    Some(tbl) => tbl.truncate(),
+                    Some(tbl) => {
+                        tbl.truncate();
+                        if let Some(txs) = self.ws_map.get(&tbl.name.to_lowercase()) {
+                            for tx in txs {
+                                _ = tx.send(format!("table: {tbl_name} truncated"));
+                            }
+                        }
+                    }
                     None => Err(Error::TableNotFound(tbl_name))?,
                 }
             }
@@ -227,7 +263,17 @@ impl Database {
                     .find(|t| t.name.to_lowercase() == table.to_lowercase())
                 {
                     Some(tbl) => {
-                        tbl.insert(columns, sources)?;
+                        tbl.insert(columns.clone(), sources.clone())?;
+
+                        let outcols: Vec<OutColumn> =
+                            tbl.columns.iter().map(OutColumn::from).collect();
+                        let view = View::new(outcols);
+                        if let Some(txs) = self.ws_map.get(&tbl.name.to_lowercase()) {
+                            for tx in txs {
+                                _ = tx.send(format!("table: {} updated\n {view}", tbl.name));
+                                log::info!("sent insert updates");
+                            }
+                        }
                     }
                     None => Err(Error::TableNotFound(table))?,
                 }
@@ -259,6 +305,14 @@ impl Database {
                 let selected = selected[0].data.keys_where_true()?;
 
                 table.update(assignments, selected)?;
+
+                let outcols: Vec<OutColumn> = table.columns.iter().map(OutColumn::from).collect();
+                let view = View::new(outcols);
+                if let Some(txs) = self.ws_map.get(&table.name.to_lowercase()) {
+                    for tx in txs {
+                        _ = tx.send(format!("table: {} updated\n {view}", table.name));
+                    }
+                }
             }
             Query::Delete { table, selection } => {
                 let table = self
@@ -276,11 +330,22 @@ impl Database {
                     }
                     let selected = selected[0].data.keys_where_true()?;
                     table.delete(selected)?;
+
+                    let outcols: Vec<OutColumn> =
+                        table.columns.iter().map(OutColumn::from).collect();
+                    let view = View::new(outcols);
+                    if let Some(txs) = self.ws_map.get(&table.name.to_lowercase()) {
+                        for tx in txs {
+                            _ = tx
+                                .send(format!("data deleted from table: {}\n {view}", table.name));
+                        }
+                    }
                 } else {
                     table.truncate();
                 }
             }
         }
+
         Ok(None)
     }
 
