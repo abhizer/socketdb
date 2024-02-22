@@ -1355,6 +1355,7 @@ dependencies = [
  "serde_json",
  "sqlparser",
  "thiserror",
+ "zstd",
 ]
 
 [[package]]

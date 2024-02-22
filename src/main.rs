@@ -15,7 +15,7 @@ use socketdb::database::Database;
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(
         env_logger::Env::from("SOCKET_DB_LOG_LEVEL")
-            .default_filter_or("debug,rustyline=error,sqlparser=error"),
+            .default_filter_or("error,rustyline=error,sqlparser=error"),
     )
     .init();
 
@@ -23,28 +23,43 @@ async fn main() -> Result<()> {
     let (tx, rx) = flume::bounded(2);
 
     std::thread::spawn(move || {
-        let mut rl = rustyline::DefaultEditor::new()?;
+        let res = move || -> Result<()> {
+            let mut rl = rustyline::DefaultEditor::new()?;
 
-        let mut db = Database::new();
-        db.set_receiver(rx);
+            let mut db = Database::new();
+            db.set_receiver(rx);
 
-        loop {
-            match rl.readline(">> ") {
-                Ok(line) => {
-                    db.execute_all(line.trim())?;
-                }
-                Err(
-                    rustyline::error::ReadlineError::Eof
-                    | rustyline::error::ReadlineError::Interrupted,
-                ) => {
-                    break;
-                }
-                Err(err) => {
-                    log::error!("error: {err}");
-                    std::process::exit(1);
+            loop {
+                match rl.readline(">> ") {
+                    Ok(line) => {
+                        if let Err(e) = db.execute_all(line.trim()) {
+                            log::error!("{e}");
+                            continue;
+                        }
+                    }
+                    Err(
+                        rustyline::error::ReadlineError::Eof
+                        | rustyline::error::ReadlineError::Interrupted,
+                    ) => {
+                        break;
+                    }
+                    Err(err) => {
+                        log::error!("error: {err}");
+                        std::process::exit(1);
+                    }
                 }
             }
-        }
+
+            Ok(())
+        };
+
+        match res() {
+            Ok(_) => {}
+            Err(e) => {
+                log::error!("{e}");
+                std::process::exit(1);
+            }
+        };
 
         anyhow::Ok(())
     });

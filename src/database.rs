@@ -10,7 +10,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     fs::File,
-    io::{BufReader, Read},
+    io::{BufReader, BufWriter, Read, Write},
     path::Path,
     str::FromStr,
 };
@@ -393,6 +393,29 @@ impl Database {
             }
 
             MetaCommand::Exit => std::process::exit(0),
+            MetaCommand::Persist(path) => {
+                let json = serde_json::to_string(&self).expect("failed to serialize the database");
+
+                let file = File::create(path).expect("failed to create file");
+                let buf = BufWriter::new(file);
+
+                let mut encoder =
+                    zstd::Encoder::new(buf, 3).expect("failed to create zstd compression ecoder");
+                encoder
+                    .write_all(json.as_bytes())
+                    .expect("failed to write to file");
+                encoder.finish().expect("failed to finish writing to file");
+            }
+            MetaCommand::Restore(path) => {
+                let file = File::open(path).expect("failed to open file");
+                let buf = BufReader::new(file);
+
+                let decoded = zstd::decode_all(buf).expect("failed to decode db from disk");
+                let db: Database =
+                    serde_json::from_slice(&decoded).expect("db deserialization error");
+
+                self.tables = db.tables;
+            }
         }
     }
 }
